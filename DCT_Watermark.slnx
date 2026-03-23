@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="DCT_Watermark.vcxproj" Id="a01a6971-e567-460f-a6ca-487aa6847670" />
+</Solution>
