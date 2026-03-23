@@ -1,7 +1,6 @@
-# DCT Discrete Cosine Transform Watermarking Algorithm README | DCT离散余弦变换水印算法
+# DCT Watermark Tool | DCT离散余弦变换水印工具
 
 <div align="center">
-
 **Language / 语言选择:**
 [English](#english) | [中文](#中文)
 
@@ -10,465 +9,208 @@
 </div>
 <a id="english"></a>
 
-## Core Concepts: Mapping from Spatial Domain to Frequency Domain
+# DCT Watermark Tool
 
-In digital imaging, the **Spatial Domain** refers to the arrangement of pixel intensities on a two-dimensional coordinate system. Conversely, the **DCT (Discrete Cosine Transform)** is an orthogonal linear transform that decomposes the color components of an image block into a combination of cosine waves with different frequencies.
+A lightweight and efficient C library for embedding and extracting text watermarks in images of various formats. This project employs the **Discrete Cosine Transform** (DCT) algorithm to hide watermark information in the mid-frequency domain of an image. It offers excellent visual invisibility and strong robustness, capable of withstanding attacks such as cropping and tampering.
 
-### Physical Significance of Frequency Components
+## Features
 
-When an $8 \times 8$ pixel matrix undergoes a DCT transform, a 64th-order coefficient matrix is generated.
+- **Multi-Format Support**: Powered by the powerful `stb_image` library, it supports loading and saving mainstream image formats including **PNG, JPEG, BMP, TGA**, etc.
+- **High Robustness**: Utilizes full-image redundant embedding and intelligent offset-searching techniques. It can reliably extract watermark information even when the image is **cropped by half or subjected to tampering attacks**.
+- **DCT Domain Watermarking**: Operates on the image's DCT coefficients, resulting in minimal visual impact and preserving the original image's high quality.
+- **Efficient Implementation**: Achieves fast processing through pre-calculated lookup tables (LUTs) and optimized DCT/IDCT algorithms.
+- **Command-Line Interface**: Provides a simple and easy-to-use command-line tool, convenient for batch processing.
+- **Embed/Extract**: Supports embedding text information into images and losslessly extracting the original information from them.
+- **Intelligent Saving**: Automatically selects the corresponding image format for saving based on the output file's extension.
+- **Flexible Strength**: Users can customize the embedding strength to balance between watermark invisibility and interference resistance.
 
-- **Low Frequency**: Located at the top-left corner of the matrix, representing the base color and average brightness (DC component) of the image.
-- **Mid Frequency**: Located in the middle of the matrix, representing structural contours and primary textures.
-- **High Frequency**: Located at the bottom-right corner of the matrix, representing edge sharpness, noise, and fine textures.
+## Build Environment
 
-### Purpose of Energy Conversion
+- **Operating Systems**: Linux, macOS, Windows (MinGW/Cygwin)
+- **Compiler**: GCC or Clang (requires C99 standard support)
+- **Dependencies**: `libm` (Math library). The project includes `stb_image.h` and `stb_image_write.h`, no additional installation is required.
 
-Converting spatial signals into frequency distributions is done to achieve **Energy Concentration**. In most natural images, the vast majority of energy (information) is concentrated in the low-frequency portion. The goal of a watermarking algorithm is to find a frequency band that is **both resistant to compression interference and visually imperceptible**, namely the "Mid-frequency band."
+## Compilation
 
-------
+After cloning the project locally, navigate to the project directory and use the following command to compile a command-line tool with a debug interface:
 
-## Full Algorithm Execution Process
-
-### Image Partitioning and Color Channel Selection
-
-The algorithm first divides the image into non-overlapping $8 \times 8$ pixel blocks. Typically, the **Y (Luminance) component** of the **YCbCr** color space or the **Blue channel** in the **RGB** space is selected for processing. This is because the Human Visual System (HVS) has lower sensitivity to subtle changes in the blue component.
-
-### Forward DCT Transform
-
-Using the **Separable Transform** property, mathematical operations are performed on each pixel block. At this stage, the color intensities originally distributed across spatial coordinates are transformed into 64 frequency coefficients.
-
-### Encoding and Embedding of the Watermark Signal
-
-This is the logical core of the algorithm. We utilize the **Differential Energy Modification** method, carrying binary information (0 or 1) by adjusting the relative magnitude of two specific mid-frequency coefficients (e.g., $DCT_{4,3}$ and $DCT_{3,4}$):
-
-- **Embedding Logic**:
-  - If embedding $Bit = 1$: Apply mathematical compensation to make $DCT_{4,3}$ significantly greater than $DCT_{3,4}$.
-  - If embedding $Bit = 0$: Apply mathematical compensation to make $DCT_{3,4}$ significantly greater than $DCT_{4,3}$.
-- **Strength Control (Strength)**: A step-size parameter $S$ is introduced. The difference between the modified coefficients must satisfy $|A - B| > S$. A higher $S$ increases the survival rate of the watermark against attacks like JPEG compression and scaling but may cause "blocking artifacts" in the image.
-
-### Inverse DCT Transform
-
-Once the modification is complete, an IDCT operation is performed. This step recombines the frequency coefficients into spatial domain pixel values. Since modifications only occur in the mid-frequency band, the deviation between the restored pixels and the original pixels is minimal (usually between $\pm 1$ to $\pm 3$), achieving visual invisibility.
-
-------
-
-## Robustness and Stability Mechanisms
-
-### Blind Extraction Protocol
-
-This algorithm is a "Blind Watermark," meaning the extraction side does not require the original image for reference. The extractor only needs to perform an $8 \times 8$ block DCT on the target image again and observe the direction of the difference between the predetermined coordinate coefficients. If $DCT_{4,3} > DCT_{3,4}$, it is determined to be 1; otherwise, it is 0.
-
-### Cyclic Redundancy Embedding
-
-To counter **Cropping** attacks, the algorithm embeds the watermark string (Payload) cyclically across all blocks of the entire image. As long as the first extracted byte matches a preset **Sync Marker**, the starting position of the signal can be confirmed. This implies that as long as the image retains sufficient local integrity, the watermark can be recovered.
-
-### Anti-compression Principle
-
-JPEG compression erases high-frequency coefficients via quantization tables to save space. DCT watermarking records the signal in the mid-frequency coefficients that are largely preserved, ensuring that the relative relationship between coefficients remains stable even after severe data discarding (resampling, lossy compression), thus guaranteeing information persistence.
-
-------
-
-## Core Logic Implementation
-
-### Original Algorithm
-
-To deeply understand the **DCT (Discrete Cosine Transform) watermarking algorithm**, we can implement a core demonstration version in C. This algorithm directly implements the mathematical definition of 2D-DCT:
-
-$$F(u, v) = \frac{1}{4} C(u) C(v) \sum_{x=0}^{7} \sum_{y=0}^{7} f(x, y) \cos \left[ \frac{(2x+1)u\pi}{16} \right] \cos \left[ \frac{(2y+1)v\pi}{16} \right]$$
-
-代码段
-
-```
-#include <math.h>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-/**
- * Original 2D-DCT Transform (Standard four-layer loop implementation)
- * @param f Input 8x8 spatial domain pixel matrix
- * @param F Output 8x8 frequency domain coefficient matrix
- */
-void raw_dct_2d(double f[8][8], double F[8][8]) {
-    for (int u = 0; u < 8; u++) {
-        for (int v = 0; v < 8; v++) {
-            double sum = 0.0;
-            
-            // Core: Full double accumulation of spatial coordinates (x, y)
-            for (int x = 0; x < 8; x++) {
-                for (int y = 0; y < 8; y++) {
-                    sum += f[x][y] * cos((2 * x + 1) * u * M_PI / 16.0) * cos((2 * y + 1) * v * M_PI / 16.0);
-                }
-            }
-            
-            // Calculate orthogonal normalization coefficient alpha
-            double au = (u == 0) ? sqrt(1.0/8.0) : sqrt(2.0/8.0);
-            double av = (v == 0) ? sqrt(1.0/8.0) : sqrt(2.0/8.0);
-            
-            F[u][v] = au * av * sum;
-        }
-    }
-}
-
-/**
- * Original 2D-IDCT Inverse Transform (Standard four-layer loop implementation)
- * Used to restore spatial signal f from frequency distribution F
- */
-void raw_idct_2d(double F[8][8], double f[8][8]) {
-    for (int x = 0; x < 8; x++) {
-        for (int y = 0; y < 8; y++) {
-            double sum = 0.0;
-            
-            for (int u = 0; u < 8; u++) {
-                for (int v = 0; v < 8; v++) {
-                    double au = (u == 0) ? sqrt(1.0/8.0) : sqrt(2.0/8.0);
-                    double av = (v == 0) ? sqrt(1.0/8.0) : sqrt(2.0/8.0);
-                    
-                    sum += au * av * F[u][v] * cos((2 * x + 1) * u * M_PI / 16.0) * cos((2 * y + 1) * v * M_PI / 16.0);
-                }
-            }
-            f[x][y] = sum;
-        }
-    }
-}
+```bash
+gcc -DDEBUG_MODE -o dct_watermark_tool dct_watermark.c -lm
 ```
 
-In the original algorithm, to obtain 64 $F(u, v)$ coefficients, each coefficient requires $8 \times 8 = 64$ multiply-accumulate operations. The total computational volume is $64 \times 64 = 4096$ core operations. Its complexity is $O(N^4)$ (where $N=8$). For a $1080p$ image, there are approximately $32,400$ blocks of $8 \times 8$, meaning the total computation nears **130 million floating-point operations**.
+This will generate an executable named `dct_watermark_tool`.
 
-------
+## Usage
 
-### Optimization Schemes
+### 1. Embed Watermark (`encode`)
 
-#### Lookup Table Method
+Hides text information within an image.
 
-The calculation of the `cos` function is expensive. In an $8 \times 8$ DCT, there are only 64 fixed combinations of input values for `cos`. Pre-calculating these 64 values and storing them in a static array can increase calculation speed several times over. The optimized code is shown below:
-
-代码段
-
-```
-/* Global static lookup table: stores pre-calculated cosine coefficients to eliminate redundant trigonometric calculation overhead */
-static double COS_TABLE[8][8];
-static int table_initialized = 0;
-
-/**
- * init_tables: Pre-calculates the DCT coefficient table
- * Based on the DCT-II standard formula, pre-calculates cos((2j+1)iπ / 16) and caches it
- */
-void init_tables() {
-    int i, j;
-    if (table_initialized) return;
-    for (i = 0; i < 8; i++) {
-        for (j = 0; j < 8; j++) {
-            COS_TABLE[i][j] = cos((2 * j + 1) * i * M_PI / 16.0);
-        }
-    }
-    table_initialized = 1;
-}
+```bash
+./dct_watermark_tool encode <input_image_path> <output_image_path> "<text_to_embed>" [strength]
 ```
 
-#### Separable Transform
+- `encode`: Specifies the embedding mode.
+- `<input_image_path>`: Path to the source image (supports PNG, JPG, BMP, TGA, etc.).
+- `<output_image_path>`: Path for the generated watermarked image (the extension determines the output format).
+- `"<text_to_embed>"`: The text you want to embed. Quotes are mandatory if the text contains spaces.
+- `[strength]`: Optional parameter, defaults to `20.0`. A higher value results in a more stable but potentially more visible watermark.
 
-A 2D DCT can be decomposed into two 1D DCTs. First, perform a 1D-DCT on each row, then perform a 1D-DCT on each column of the result. By processing rows and columns separately via `dct_1d`, the complexity can be reduced from $O(N^4)$ to $O(N^3)$. The optimized code is shown below:
+**Example**:
 
-C
+```bash
+# Embed "Secret Message" into image.jpg, generating output.png
+./dct_watermark_tool encode image.jpg output.png "Secret Message"
 
-```
-/**
- * fdct_1d: 1D Forward Discrete Cosine Transform (Forward DCT)
- * Converts spatial domain signals into frequency domain energy distributions
- */
-void fdct_1d(double in[8], double out[8]) {
-    int i, j;
-    for (i = 0; i < 8; i++) {
-        double sum = 0;
-        for (j = 0; j < 8; j++) {
-            sum += in[j] * COS_TABLE[i][j];
-        }
-        // Apply orthogonalization coefficient Alpha
-        double alpha = (i == 0) ? 0.35355339 : 0.5; // sqrt(1/8) and sqrt(2/8)
-        out[i] = alpha * sum;
-    }
-}
-
-/**
- * idct_1d: 1D Inverse Discrete Cosine Transform (Inverse DCT)
- * Restores frequency domain coefficients to spatial domain pixel values
- */
-void idct_1d(double in[8], double out[8]) {
-    int i, j;
-    for (j = 0; j < 8; j++) {
-        double sum = 0;
-        for (i = 0; i < 8; i++) {
-            double alpha = (i == 0) ? 0.35355339 : 0.5;
-            sum += alpha * in[i] * COS_TABLE[i][j];
-        }
-        out[j] = sum;
-    }
-}
-
-/**
- * fdct_8x8_fast: 2D Fast DCT Implementation
- * Utilizes the Separability of DCT to complete 2D matrix operations via two 1D transforms
- * Complexity reduced from O(N^4) to O(N^3)
- */
-void fdct_8x8_fast(double in[8][8], double out[8][8]) {
-    double temp[8][8];
-    int i, j;
-    // Step 1: Row transform
-    for (i = 0; i < 8; i++) fdct_1d(in[i], temp[i]);
-    // Step 2: Column transform
-    for (j = 0; j < 8; j++) {
-        double col_in[8], col_out[8];
-        for (i = 0; i < 8; i++) col_in[i] = temp[i][j];
-        fdct_1d(col_in, col_out);
-        for (i = 0; i < 8; i++) out[i][j] = col_out[i];
-    }
-}
+# Specify a strength of 30.0
+./dct_watermark_tool encode image.jpg output.png "Secret Message" 30.0
 ```
 
-#### Strength Balance
+### 2. Extract Watermark (`decode`)
 
-The `Strength` value acts as a balance bar. `28.0` is a typical equilibrium point. The higher the value, the stronger the compression resistance, but the image may display "blocking artifacts."
+Recovers text from a watermarked image.
 
-C
-
-```
-double strength = 28.0;
+```bash
+./dct_watermark_tool decode <watermarked_image_path>
 ```
 
-#### Sync Features
+- `decode`: Specifies the extraction mode.
+- `<watermarked_image_path>`: Path to the image containing the watermark.
 
-Adding a specific bit pattern (e.g., `0xAA`) at the start of the data stream helps the extractor quickly locate the starting position and filter out images without watermarks.
+**Example**:
 
-C
-
+```bash
+# Extract and print the watermark text from output.png
+./dct_watermark_tool decode output.png
 ```
-#define SYNC_MARKER 0xAA 
-```
+
+## Integration as a Library
+
+If you wish to integrate this functionality into your own C project, you can do so as follows:
+
+1. Copy the files `dct_watermark.h`, `dct_watermark.c`, `stb_image.h`, and `stb_image_write.h` into your project directory.
+2. Include the header file in your source code: `#include "dct_watermark.h"`.
+3. When compiling, compile `dct_watermark.c` along with your other source files and link the math library `-lm`. **Note**: Do not define the `DEBUG_MODE` macro. This prevents the compilation of the `main` function at the end of the file, making it exist purely as a library.
+
+The core API is the `wm_process` function. Its detailed description can be found in the `dct_watermark.h` header file.
+
+## Status Codes
+
+The return value of the command-line tool represents the operation status:
+
+- `0`: Success (WM_SUCCESS)
+- `1`: File I/O error (WM_ERROR_FILE_IO)
+- `2`: Invalid file format or image too small (WM_ERROR_INVALID_FORMAT)
+- `3`: Insufficient memory (WM_ERROR_MEMORY)
+- `4`: Insufficient image space to accommodate the watermark (WM_ERROR_INSUFFICIENT_SPACE)
+
+## Algorithm Principle
+
+This project is based on the concept of **Quantization Index Modulation** (QIM). Specifically, it redundantly embeds the watermark information (sync marker, text content, terminator) across the entire image into each 8x8 pixel block. It selects two mid-frequency coefficients from each DCT block (e.g., (3,4) and (4,3)) and encodes one bit of information by adjusting their relative magnitude relationship (which one is larger). During extraction, the program performs an 8x8 sliding offset search, scanning image blocks from different starting points to cope with potential cropping, until it finds the sync marker and recovers the complete original text.
 
 <a id="中文"></a>
 
-## 核心概念：从空间域到频率域的映射
+# DCT Watermark Tool
 
-在数字图像中，**空间域（Spatial Domain）**是指像素在二维坐标系上的亮度排列。而 **DCT（Discrete Cosine Transform）** 是一种正交线性变换，它将图像块的颜色分量分解为一系列具有不同频率的余弦波组合。
+一个轻量级、高效的 C 语言库，用于在多种格式的图像中嵌入和提取文本水印。该项目采用**离散余弦变换**（DCT）算法，将水印信息隐藏在图像的中频域，不仅具备出色的视觉隐蔽性，还拥有强大的鲁棒性，能够抵抗裁剪、涂抹等多种攻击。 
 
-### 频率分量的物理意义
+## 特性
 
-当一个 $8 \times 8$ 的像素方阵经过 DCT 变换后，会生成一个 64 阶的系数矩阵。
+- **多格式支持**: 通过强大的 `stb_image` 库，支持加载和保存包括 **PNG, JPEG, BMP, TGA** 等在内的主流图像格式。
+- **高鲁棒性**: 采用全图冗余嵌入和智能偏移搜索技术，即使图像被**裁剪一半或遭受涂抹攻击**，依然能可靠地提取出水印信息。
+- **DCT 域水印**: 在图像的 DCT 系数中进行操作，对视觉影响极小，保持了原图的高质量。
+- **高效实现**: 通过预计算查找表（LUTs）和优化的 DCT/IDCT 算法，实现了快速处理。
+- **命令行界面**: 提供简洁易用的命令行工具，方便批量处理。
+- **嵌入/提取**: 支持将文本信息嵌入图像，以及从图像中无损提取原始信息。
+- **智能保存**: 自动根据输出文件的扩展名选择对应的图像格式进行保存。
+- **灵活强度**: 用户可自定义嵌入强度，在水印的不可见性和抗干扰能力之间取得平衡。
 
-- **低频（Low Frequency）**：位于矩阵左上角，代表图像的基色和平均亮度（DC 分量）。
-- **中频（Mid Frequency）**：位于矩阵中部，代表图像的轮廓特征与主要纹理。
-- **高频（High Frequency）**：位于矩阵右下角，代表图像的边缘锐度、噪点和细微纹理。
+## 编译环境
 
-### 能量转换的目的
+*   **操作系统**: Linux, macOS, Windows (MinGW/Cygwin)
+*   **编译器**: GCC 或 Clang (需支持 C99 标准)
+*   **依赖库**: `libm` (数学库)。项目已包含 `stb_image.h` 和 `stb_image_write.h`，无需额外安装。
 
-将空间信号转换为频率分布，是为了实现**能量集中**。在大多数自然图像中，绝大部分能量（信息量）集中在低频部分，而水印算法的目标是找到一个**既能抵抗压缩干扰、又不引起视觉察觉**的频段，即“中频带”。
+## 编译
 
-## 算法执行全流程
+克隆项目到本地后，进入项目目录，使用以下命令编译一个带有调试界面的命令行工具：
 
-### 图像分块与色彩通道选择
-
-算法首先将图像划分为不重叠的 $8 \times 8$ 像素块。通常选择 **YCbCr** 色彩空间的 **Y（亮度）分量**，或者 **RGB** 空间中的**蓝色通道**进行操作。这是因为人类视觉系统（HVS）对蓝色分量的微小变化敏感度较低。
-
-### 正向 DCT 变换
-
-利用分离变换（Separable Transform）特性，对每个像素块执行数学运算。此时，原本在空间坐标上分布的颜色强度被转化为 64 个频率系数。
-
-### 水印信号的编码与嵌入
-
-这是算法的逻辑核心。我们采用**差分能量修改法**，通过调整两个特定中频位置系数（例如 $DCT_{4,3}$ 和 $DCT_{3,4}$）的相对大小来携带二进制信息（0 或 1）：
-
-- **嵌入逻辑**：
-  - 若嵌入 $Bit = 1$：通过数学补偿，使 $DCT_{4,3}$ 显著大于 $DCT_{3,4}$。
-  - 若嵌入 $Bit = 0$：通过数学补偿，使 $DCT_{3,4}$ 显著大于 $DCT_{4,3}$。
-- **强度控制 (Strength)**：引入一个步长参数 $S$。修改后的系数差异需满足 $|A - B| > S$。$S$ 越大，水印在面对 JPEG 压缩、缩放等攻击时的存活率越高，但会导致图像产生块效应（Blocky artifacts）。
-
-### 逆向 DCT 变换
-
-修改完成后，执行 IDCT 运算。这一步将频率系数重新组合成空间域的像素值。由于修改仅发生在中频段，还原后的像素值与原像素值的偏差极小（通常在 $\pm 1$ 到 $\pm 3$ 之间），从而实现了视觉上的隐形。而实现了视觉上的隐形。
-
-## 鲁棒性与稳定性保障机制
-
-### 盲提取协议
-
-该算法属于“盲水印”，即提取端无需原始图像参考。提取器仅需对目标图像再次进行 $8 \times 8$ 分块 DCT，直接观测预定坐标系数的差值方向。若 $DCT_{4,3} > DCT_{3,4}$，则判定为 1，反之为 0。
-
-### 循环冗余嵌入
-
-为了对抗图像剪裁（Cropping）攻击，算法将水印字符串（Payload）在整张图像的所有分块中进行循环嵌入。只要提取出的第一个字节符合预设的**同步特征码（Sync Marker）**，即可确认信号起始位置。这意味着只要图像保留了足够的局部完整性，水印即可恢复。
-
-### 抗压缩原理
-
-JPEG 压缩通过量化表抹除高频系数以节省空间。DCT 水印将信号刻录在保留较完整的中频系数中，使其在经历剧烈的数据舍弃（重采样、有损压缩）后，系数间的相对比例关系依然能够维持稳定，从而确保了信息的持久性。
-
-## 核心逻辑实现
-
-### 原始算法
-
-为了深入理解 **DCT（离散余弦变换）水印算法**，我们可以通过 C 实现一个核心演示版本。该算法直接实现 2D-DCT 的数学定义式：
-
-$$F(u, v) = \frac{1}{4} C(u) C(v) \sum_{x=0}^{7} \sum_{y=0}^{7} f(x, y) \cos \left[ \frac{(2x+1)u\pi}{16} \right] \cos \left[ \frac{(2y+1)v\pi}{16} \right]$$
-
-```C
-#include <math.h>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-/**
- * 原始 2D-DCT 变换（标准四层循环实现）
- * @param f 输入的 8x8 空间域像素矩阵
- * @param F 输出的 8x8 频率域系数矩阵
- */
-void raw_dct_2d(double f[8][8], double F[8][8]) {
-    for (int u = 0; u < 8; u++) {
-        for (int v = 0; v < 8; v++) {
-            double sum = 0.0;
-            
-            // 核心：空间域坐标 (x, y) 的全量双重累加
-            for (int x = 0; x < 8; x++) {
-                for (int y = 0; y < 8; y++) {
-                    sum += f[x][y] * cos((2 * x + 1) * u * M_PI / 16.0) * cos((2 * y + 1) * v * M_PI / 16.0);
-                }
-            }
-            
-            // 计算正交归一化系数 alpha
-            double au = (u == 0) ? sqrt(1.0/8.0) : sqrt(2.0/8.0);
-            double av = (v == 0) ? sqrt(1.0/8.0) : sqrt(2.0/8.0);
-            
-            F[u][v] = au * av * sum;
-        }
-    }
-}
-
-/**
- * 原始 2D-IDCT 逆变换（标准四层循环实现）
- * 用于从频率分布 F 还原回空间信号 f
- */
-void raw_idct_2d(double F[8][8], double f[8][8]) {
-    for (int x = 0; x < 8; x++) {
-        for (int y = 0; y < 8; y++) {
-            double sum = 0.0;
-            
-            for (int u = 0; u < 8; u++) {
-                for (int v = 0; v < 8; v++) {
-                    double au = (u == 0) ? sqrt(1.0/8.0) : sqrt(2.0/8.0);
-                    double av = (v == 0) ? sqrt(1.0/8.0) : sqrt(2.0/8.0);
-                    
-                    sum += au * av * F[u][v] * cos((2 * x + 1) * u * M_PI / 16.0) * cos((2 * y + 1) * v * M_PI / 16.0);
-                }
-            }
-            f[x][y] = sum;
-        }
-    }
-}
+```bash
+gcc -DDEBUG_MODE -o dct_watermark_tool dct_watermark.c -lm
 ```
 
-在原始算法中，为了得到 64 个 $F(u, v)$ 系数，每一个系数都需要进行 $8 \times 8 = 64$ 次乘法累加。总计算量为 $64 \times 64 = 4096$ 次核心运算。其复杂度为 $O(N^4)$（其中 $N=8$）。对于一张 $1080p$ 的图片，大约有 $32,400$ 个 $8 \times 8$ 块，这意味着总计算量接近 **1.3 亿次浮点运算**。
+这将生成一个名为 `dct_watermark_tool` 的可执行文件。
 
-### 优化方案
+## 用法
 
-经过优化后的完整代码参见：[DCT_Watermark](https://github.com/Mal-Suen/DCT_Watermark)
+### 1. 嵌入水印 (`encode`)
 
-#### 查表法
+将文本信息隐藏到 BMP 图像中。
 
-`cos` 函数的计算非常昂贵。而在 $8 \times 8$ 的 DCT 中，`cos` 的输入值只有 64 种固定的组合。预先计算好这 64 个值，存入一个静态数组，可是计算速度增加数倍。优化后的代码如下所示：
-
-```C
- /* 全局静态查找表：存储预计算的余弦系数，消除重复的三角函数运算开销 */
-static double COS_TABLE[8][8];
-static int table_initialized = 0;
-
-/**
- * init_tables: 预计算 DCT 系数表
- * 依据 DCT-II 标准公式，提前计算 cos((2j+1)iπ / 16) 并缓存
- */
-void init_tables() {
-    int i, j;
-    if (table_initialized) return;
-    for (i = 0; i < 8; i++) {
-        for (j = 0; j < 8; j++) {
-            COS_TABLE[i][j] = cos((2 * j + 1) * i * M_PI / 16.0);
-        }
-    }
-    table_initialized = 1;
-}
+```bash
+./dct_watermark_tool encode <输入图像路径> <输出图像路径> "<要嵌入的文本>" [强度]
 ```
 
-#### 可分离变换
+- `encode`: 指定嵌入模式。
+- `<输入图像路径>`: 原始 BMP 图像的路径。
+- `<输出图像路径>`: 生成的含水印 BMP 图像的路径。
+- `"<要嵌入的文本>"`: 您要嵌入的文本，包含空格时必须加引号。
+- `[强度]`: 可选参数，默认为 `20.0`。数值越高，水印越稳定但可能越明显。
 
-二维 DCT 可以分解为两次一维 DCT。先对每一行做 1D-DCT，再对结果的每一列做 1D-DCT。通过 `dct_1d` 分两次处理行和列，可以将复杂度从 $O(N^4)$ 降至 $O(N^3)$ 。优化后的代码如下所示：
+**示例**:
 
-```c
-/**
- * fdct_1d: 一维正向离散余弦变换 (Forward DCT)
- * 将空间域信号转换为频率域能量分布
- */
-void fdct_1d(double in[8], double out[8]) {
-    int i, j;
-    for (i = 0; i < 8; i++) {
-        double sum = 0;
-        for (j = 0; j < 8; j++) {
-            sum += in[j] * COS_TABLE[i][j];
-        }
-        // 应用正交化系数 Alpha
-        double alpha = (i == 0) ? 0.35355339 : 0.5; // sqrt(1/8) 与 sqrt(2/8)
-        out[i] = alpha * sum;
-    }
-}
+```bash
+# 将 "Secret Message" 嵌入到 image.bmp 中，生成 output.bmp
+./dct_watermark_tool encode image.bmp output.bmp "Secret Message"
 
-/**
- * idct_1d: 一维逆向离散余弦变换 (Inverse DCT)
- * 将频率域系数还原回空间域像素值
- */
-void idct_1d(double in[8], double out[8]) {
-    int i, j;
-    for (j = 0; j < 8; j++) {
-        double sum = 0;
-        for (i = 0; i < 8; i++) {
-            double alpha = (i == 0) ? 0.35355339 : 0.5;
-            sum += alpha * in[i] * COS_TABLE[i][j];
-        }
-        out[j] = sum;
-    }
-}
-
-/**
- * fdct_8x8_fast: 二维快速 DCT 实现
- * 利用 DCT 的可分离特性 (Separability)，通过两次一维变换完成二维矩阵运算
- * 复杂度由 O(N^4) 降至 O(N^3)
- */
-void fdct_8x8_fast(double in[8][8], double out[8][8]) {
-    double temp[8][8];
-    int i, j;
-    // 步骤1：行变换
-    for (i = 0; i < 8; i++) fdct_1d(in[i], temp[i]);
-    // 步骤2：列变换
-    for (j = 0; j < 8; j++) {
-        double col_in[8], col_out[8];
-        for (i = 0; i < 8; i++) col_in[i] = temp[i][j];
-        fdct_1d(col_in, col_out);
-        for (i = 0; i < 8; i++) out[i][j] = col_out[i];
-    }
-}
+# 指定强度为 30.0
+./dct_watermark_tool encode image.bmp output.bmp "Secret Message" 30.0
 ```
 
-#### 强度平衡
+### 2. 提取水印 (`decode`)
 
-强度值（Strength）是一个平衡杆。`28.0` 是一个平衡点。数值越大，抗压缩越强，但图片可能出现色块（块效应）。
+从含水印的 BMP 图像中恢复文本。
 
-```c
-double strength = 28.0;
+```bash
+./dct_watermark_tool decode <含水印的图像路径>
 ```
 
-#### 同步特征
+- `decode`: 指定提取模式。
+- `<含水印的图像路径>`: 包含水印的 BMP 图像的路径。
 
-在数据流开头加入特定的位模式（如 `0xAA`），可以帮助提取器快速定位起始位置并过滤无水印图片。
+**示例**:
 
-```c
-#define SYNC_MARKER 0xAA 
+```bash
+# 从 output.bmp 中提取并打印水印文本
+./dct_watermark_tool decode output.bmp
 ```
+
+## 作为库集成
+
+如果你想将此功能集成到自己的 C 项目中，可以这样做：
+
+1. 将 `dct_watermark.h`, `dct_watermark.c`, `stb_image.h`, `stb_image_write.h` 文件复制到你的项目目录。
+2. 在你的源代码中包含头文件：`#include "dct_watermark.h"`。
+3. 编译时，将 `dct_watermark.c` 与您的其他源文件一起编译，并链接数学库 `-lm`。**注意**：不要定义 `DEBUG_MODE` 宏，这样就不会编译文件末尾的 `main` 函数，使其作为一个纯库存在。
+
+核心 API 是 `wm_process` 函数，其详细说明可在 `dct_watermark.h` 头文件中找到。
+
+## 状态码
+
+命令行工具的返回值代表操作状态：
+
+- `0`: 成功 (WM_SUCCESS)
+- `1`: 文件 I/O 错误 (WM_ERROR_FILE_IO)
+- `2`: 文件格式无效或图像太小 (WM_ERROR_INVALID_FORMAT)
+- `3`: 内存不足 (WM_ERROR_MEMORY)
+- `4`: 图像空间不足以容纳水印 (WM_ERROR_INSUFFICIENT_SPACE)
+
+## 文件格式要求
+
+- 仅支持 **24 位真彩色** (RGB) BMP 文件。
+- 图像尺寸必须大于等于 8x8 像素。
+
+## 算法原理
+
+该项目采用**量化索引调制**（Quantization Index Modulation, QIM）的思想。具体来说，它将水印信息（同步标记、文本内容、结束符）全图冗余地嵌入到每个 8x8 像素块中。它选取每 DCT 块中的两个中频系数（如 (3,4) 和 (4,3)），通过调整这两个系数的相对大小关系（哪个更大）来编码一位信息。提取时，程序会进行 8x8 的滑动偏移搜索，从不同起始点扫描图像块，以应对可能的裁剪，直到找到同步标记并恢复出完整的原始文本。
 
