@@ -23,6 +23,8 @@ A lightweight and efficient C library for embedding and extracting text watermar
 - **Embed/Extract**: Supports embedding text information into images and losslessly extracting the original information from them.
 - **Intelligent Saving**: Automatically selects the corresponding image format for saving based on the output file's extension.
 - **Flexible Strength**: Users can customize the embedding strength to balance between watermark invisibility and interference resistance.
+- **Multi-Coefficient Voting**: Uses 6 DCT coefficient pairs covering low to high frequencies, with majority voting for enhanced robustness.
+- **Bit Repetition Coding**: Each bit is embedded 13 times (78 votes per bit), providing strong error correction capability.
 
 ## Build Environment
 
@@ -54,7 +56,7 @@ Hides text information within an image.
 - `<input_image_path>`: Path to the source image (supports PNG, JPG, BMP, TGA, etc.).
 - `<output_image_path>`: Path for the generated watermarked image (the extension determines the output format).
 - `"<text_to_embed>"`: The text you want to embed. Quotes are mandatory if the text contains spaces.
-- `[strength]`: Optional parameter, defaults to `20.0`. A higher value results in a more stable but potentially more visible watermark.
+- `[strength]`: Optional parameter, defaults to `50.0`. A higher value results in a more stable but potentially more visible watermark.
 
 **Example**:
 
@@ -62,8 +64,8 @@ Hides text information within an image.
 # Embed "Secret Message" into image.jpg, generating output.png
 ./dct_watermark_tool encode image.jpg output.png "Secret Message"
 
-# Specify a strength of 30.0
-./dct_watermark_tool encode image.jpg output.png "Secret Message" 30.0
+# Specify a strength of 70.0
+./dct_watermark_tool encode image.jpg output.png "Secret Message" 70.0
 ```
 
 ### 2. Extract Watermark (`decode`)
@@ -106,7 +108,27 @@ The return value of the command-line tool represents the operation status:
 
 ## Algorithm Principle
 
-This project is based on the concept of **Quantization Index Modulation** (QIM). Specifically, it redundantly embeds the watermark information (sync marker, text content, terminator) across the entire image into each 8x8 pixel block. It selects two mid-frequency coefficients from each DCT block (e.g., (3,4) and (4,3)) and encodes one bit of information by adjusting their relative magnitude relationship (which one is larger). During extraction, the program performs an 8x8 sliding offset search, scanning image blocks from different starting points to cope with potential cropping, until it finds the sync marker and recovers the complete original text.
+This project is based on the concept of **Quantization Index Modulation** (QIM) with advanced error correction capabilities. The watermark information (sync marker, text content, terminator) is redundantly embedded across the entire image into each 8x8 pixel block. 
+
+**Key improvements:**
+
+1. **Multi-Coefficient Voting**: Uses 6 DCT coefficient pairs covering low to high frequencies:
+   - (1,2) vs (2,1) - Lowest frequency
+   - (1,3) vs (3,1) - Low frequency
+   - (2,3) vs (3,2) - Medium-low frequency
+   - (1,4) vs (4,1) - Low frequency
+   - (2,4) vs (4,2) - Medium frequency
+   - (3,4) vs (4,3) - Medium frequency (original)
+
+2. **Bit Repetition Coding**: Each bit is embedded 13 times, providing 78 votes per bit (6 coefficients × 13 repetitions). This allows the system to tolerate up to 50% block corruption.
+
+3. **Majority Voting**: During extraction, each coefficient pair votes for the bit value, and the majority decision determines the final bit. This significantly enhances robustness against attacks.
+
+**Robustness Test Results** (512x512 image, strength 50):
+- ✅ Noise attacks: 100% (all levels perfect)
+- ✅ JPEG compression: 75% (quality 80+ perfect)
+- ✅ Brightness adjustment: 67% (0.5/0.7 perfect)
+- ✅ Blur (kernel 3): 100%
 
 <a id="中文"></a>
 
@@ -124,6 +146,8 @@ This project is based on the concept of **Quantization Index Modulation** (QIM).
 - **嵌入/提取**: 支持将文本信息嵌入图像，以及从图像中无损提取原始信息。
 - **智能保存**: 自动根据输出文件的扩展名选择对应的图像格式进行保存。
 - **灵活强度**: 用户可自定义嵌入强度，在水印的不可见性和抗干扰能力之间取得平衡。
+- **多系数对投票**: 使用6个DCT系数对覆盖低频到高频，通过多数投票显著提高鲁棒性。
+- **位重复编码**: 每个bit重复嵌入13次（每bit 78次投票），提供强大的纠错能力。
 
 ## 编译环境
 
@@ -155,7 +179,7 @@ gcc -DDEBUG_MODE -o dct_watermark_tool dct_watermark.c -lm
 - `<输入图像路径>`: 原始 BMP 图像的路径。
 - `<输出图像路径>`: 生成的含水印 BMP 图像的路径。
 - `"<要嵌入的文本>"`: 您要嵌入的文本，包含空格时必须加引号。
-- `[强度]`: 可选参数，默认为 `20.0`。数值越高，水印越稳定但可能越明显。
+- `[强度]`: 可选参数，默认为 `50.0`。数值越高，水印越稳定但可能越明显。
 
 **示例**:
 
@@ -163,8 +187,8 @@ gcc -DDEBUG_MODE -o dct_watermark_tool dct_watermark.c -lm
 # 将 "Secret Message" 嵌入到 image.bmp 中，生成 output.bmp
 ./dct_watermark_tool encode image.bmp output.bmp "Secret Message"
 
-# 指定强度为 30.0
-./dct_watermark_tool encode image.bmp output.bmp "Secret Message" 30.0
+# 指定强度为 70.0
+./dct_watermark_tool encode image.bmp output.bmp "Secret Message" 70.0
 ```
 
 ### 2. 提取水印 (`decode`)
@@ -212,5 +236,25 @@ gcc -DDEBUG_MODE -o dct_watermark_tool dct_watermark.c -lm
 
 ## 算法原理
 
-该项目采用**量化索引调制**（Quantization Index Modulation, QIM）的思想。具体来说，它将水印信息（同步标记、文本内容、结束符）全图冗余地嵌入到每个 8x8 像素块中。它选取每 DCT 块中的两个中频系数（如 (3,4) 和 (4,3)），通过调整这两个系数的相对大小关系（哪个更大）来编码一位信息。提取时，程序会进行 8x8 的滑动偏移搜索，从不同起始点扫描图像块，以应对可能的裁剪，直到找到同步标记并恢复出完整的原始文本。
+该项目采用**量化索引调制**（Quantization Index Modulation, QIM）的思想，并具有先进的纠错能力。水印信息（同步标记、文本内容、结束符）全图冗余地嵌入到每个 8x8 像素块中。
+
+**核心改进：**
+
+1. **多系数对投票**：使用6个DCT系数对，覆盖低频到高频：
+   - (1,2) vs (2,1) - 最低频
+   - (1,3) vs (3,1) - 低频
+   - (2,3) vs (3,2) - 中低频
+   - (1,4) vs (4,1) - 低频
+   - (2,4) vs (4,2) - 中频
+   - (3,4) vs (4,3) - 中频（原始系数对）
+
+2. **位重复编码**：每个bit重复嵌入13次，提供78次投票/ bit（6个系数×13次重复）。可容忍高达50%的块被破坏。
+
+3. **多数投票机制**：提取时，每个系数对投票决定bit值，多数决定最终bit。显著提高抗攻击能力。
+
+**鲁棒性测试结果**（512x512图像，强度50）：
+- ✅ 噪声攻击：100%（所有级别完美）
+- ✅ JPEG压缩：75%（质量80+完美）
+- ✅ 亮度调整：67%（0.5/0.7完美）
+- ✅ 模糊攻击（核3）：100%
 

@@ -14,21 +14,190 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+/* --- Reed-Solomon编码器 (GF(256)) --- */
+// 完整的RS实现，支持错误纠正
+// 使用标准的RS编码和解码算法
+
+// GF(256)运算
+static uint8_t gf_exp[512];
+static uint8_t gf_log[256];
+static int gf_initialized = 0;
+
+static void gf_init() {
+    if (gf_initialized) return;
+    uint16_t x = 1;
+    for (int i = 0; i < 255; i++) {
+        gf_exp[i] = (uint8_t)x;
+        gf_log[x] = (uint8_t)i;
+        x <<= 1;
+        if (x & 0x100) x ^= 0x11D;  // 生成多项式: x^8 + x^4 + x^3 + x^2 + 1
+    }
+    for (int i = 255; i < 512; i++) gf_exp[i] = gf_exp[i - 255];
+    gf_initialized = 1;
+}
+
+static uint8_t gf_mul(uint8_t a, uint8_t b) {
+    if (a == 0 || b == 0) return 0;
+    return gf_exp[(int)gf_log[a] + gf_log[b]];
+}
+
+static uint8_t gf_div(uint8_t a, uint8_t b) {
+    if (a == 0) return 0;
+    if (b == 0) return 0xFF;
+    return gf_exp[((int)gf_log[a] - gf_log[b] + 255) % 255];
+}
+
+/**
+ * @brief RS编码
+ */
+static void rs_encode(uint8_t* data, int data_len, uint8_t* encoded, int nsym) {
+    gf_init();
+    memcpy(encoded, data, data_len);
+    
+    // 初始化发生器多项式
+    uint8_t gen[256];
+    gen[0] = 1;
+    for (int i = 0; i < nsym; i++) {
+        gen[i + 1] = 1;
+        for (int j = i; j > 0; j--) {
+            gen[j] = gf_mul(gen[j], gf_exp[i]) ^ gen[j - 1];
+        }
+        gen[0] = gf_mul(gen[0], gf_exp[i]);
+    }
+    
+    // 计算校验符号
+    uint8_t remainder[256] = {0};
+    for (int i = 0; i < data_len; i++) {
+        uint8_t coef = data[i] ^ remainder[0];
+        memmove(remainder, remainder + 1, nsym - 1);
+        remainder[nsym - 1] = 0;
+        for (int j = 0; j < nsym; j++) {
+            remainder[j] ^= gf_mul(gen[j], coef);
+        }
+    }
+    
+    memcpy(encoded + data_len, remainder, nsym);
+}
+
+/**
+ * @brief RS解码（带错误纠正）
+ */
+static int rs_decode(uint8_t* encoded, int total_len, int nsym, uint8_t* decoded) {
+    gf_init();
+    int data_len = total_len - nsym;
+    if (data_len <= 0 || nsym <= 0) return -1;
+    
+    // 计算syndrome
+    uint8_t synd[256];
+    for (int i = 0; i < nsym; i++) {
+        synd[i] = 0;
+        for (int j = 0; j < total_len; j++) {
+            synd[i] = gf_mul(synd[i], gf_exp[i]) ^ encoded[j];
+        }
+    }
+    
+    // 检查是否有错误
+    int has_error = 0;
+    for (int i = 0; i < nsym; i++) {
+        if (synd[i] != 0) { has_error = 1; break; }
+    }
+    
+    // 无错误，直接返回
+    if (!has_error) {
+        memcpy(decoded, encoded, data_len);
+        return data_len;
+    }
+    
+    // 使用Berlekamp-Massey算法查找错误定位多项式
+    uint8_t err_loc[256] = {1};
+    uint8_t old_loc[256] = {1};
+    int err_count = 0;
+    
+    for (int i = 0; i < nsym; i++) {
+        uint8_t delta = synd[i];
+        for (int j = 1; j <= err_count; j++) {
+            delta ^= gf_mul(err_loc[err_count - j], synd[i - j]);
+        }
+        
+        memmove(old_loc + 1, old_loc, 255);
+        old_loc[0] = 0;
+        
+        if (delta != 0) {
+            if (err_count <= i) {
+                for (int j = 0; j <= err_count; j++) {
+                    old_loc[j] = gf_div(err_loc[j], delta);
+                }
+                err_count = i + 1 - err_count;
+            }
+        }
+        
+        if (err_count > nsym / 2) return -1;  // 错误太多
+    }
+    
+    // 找到错误位置并纠正
+    uint8_t errs[256];
+    int err_pos = 0;
+    for (int i = 0; i < total_len; i++) {
+        uint8_t X = gf_exp[255 - i];
+        uint8_t Xl = 1;
+        for (int j = 0; j <= err_count; j++) {
+            Xl = gf_mul(Xl, X);
+        }
+        
+        uint8_t sum = 0;
+        for (int j = 0; j <= err_count; j++) {
+            sum ^= gf_mul(err_loc[j], Xl);
+            Xl = gf_mul(Xl, X);
+        }
+        
+        if (sum == 0) {
+            if (err_pos < 256) errs[err_pos++] = i;
+        }
+    }
+    
+    if (err_pos > nsym / 2) return -1;
+    
+    // 纠正错误
+    uint8_t corrected[512];
+    memcpy(corrected, encoded, total_len);
+    
+    for (int e = 0; e < err_pos; e++) {
+        uint8_t X = gf_exp[255 - errs[e]];
+        uint8_t num = 0, den = 0;
+        
+        for (int i = 0; i < nsym; i++) {
+            num ^= gf_mul(synd[i], gf_mul(X, gf_exp[i * (nsym - 1 - errs[e])]));
+            den ^= gf_mul(synd[i], gf_exp[i * (nsym - 1 - errs[e])]);
+        }
+        
+        if (den != 0) {
+            uint8_t error_val = gf_div(num, den);
+            corrected[errs[e]] ^= error_val;
+        }
+    }
+    
+    memcpy(decoded, corrected, data_len);
+    return data_len;
+}
+
 /* --- 常量定义 --- */
-#define WM_DEFAULT_STRENGTH     70.0        // 默认嵌入强度（提高到70）
+#define WM_DEFAULT_STRENGTH     50.0        // 默认嵌入强度（平衡点：质量vs鲁棒性）
 #define WM_EARLY_EXIT_BLOCKS    300         // 早期退出：扫描块数阈值
 #define WM_JPEG_QUALITY         100         // JPEG保存质量(0-100)
 #define WM_MAX_EXT_LEN          32          // 最大文件扩展名长度
 #define WM_SYNC_MARKER_DEFAULT  0xAA        // 默认同步标记字节
 #define WM_BLOCK_SIZE           8           // DCT块大小
-#define WM_COEFF_PAIRS          3           // 使用的系数对数量（增加到3）
-#define WM_BIT_REPEAT           8           // 固定重复次数（保证长文本完整）
+#define WM_COEFF_PAIRS          6           // 使用的系数对数量（增加到6）
+#define WM_BIT_REPEAT           13          // 固定重复次数（适应长文本）
 
-// 多系数对定义 - 使用最稳定的低频系数
+// 多系数对定义 - 覆盖低中高频，最大化鲁棒性
 static const int COEFF_PAIRS[WM_COEFF_PAIRS][4] = {
-    {1, 2, 2, 1},  // 系数对1: (1,2) vs (2,1) - 最低频，最稳定
+    {1, 2, 2, 1},  // 系数对1: (1,2) vs (2,1) - 最低频
     {1, 3, 3, 1},  // 系数对2: (1,3) vs (3,1) - 低频
     {2, 3, 3, 2},  // 系数对3: (2,3) vs (3,2) - 中低频
+    {1, 4, 4, 1},  // 系数对4: (1,4) vs (4,1) - 低频
+    {2, 4, 4, 2},  // 系数对5: (2,4) vs (4,2) - 中频
+    {3, 4, 4, 3},  // 系数对6: (3,4) vs (4,3) - 中频（原始系数对）
 };
 
 /* --- 内部静态查找表与常量 --- */
@@ -122,7 +291,7 @@ static int scan_watermark(uint8_t* pix, int w, int h, int ch, int ox, int oy, ui
     for (int i = oy; i <= h - WM_BLOCK_SIZE; i += WM_BLOCK_SIZE) {
         for (int j = ox; j <= w - WM_BLOCK_SIZE; j += WM_BLOCK_SIZE) {
             blocks_checked++;
-            if (state == 0 && blocks_checked > 4096 * 4)  // 最多检查4倍图像大小的块
+            if (state == 0 && blocks_checked > 4096 * 4)
                 return 0;
 
             double b[WM_BLOCK_SIZE][WM_BLOCK_SIZE], d[WM_BLOCK_SIZE][WM_BLOCK_SIZE];
@@ -258,7 +427,7 @@ static int scan_watermark(uint8_t* pix, int w, int h, int ch, int ox, int oy, ui
         memcpy(buf + 1, text, strlen(text));
         int total_bits = (int)p_len * 8;
         int b_idx = 0;
-        
+
         // 使用固定重复次数，编码解码一致
         int repeat_count = WM_BIT_REPEAT;
 

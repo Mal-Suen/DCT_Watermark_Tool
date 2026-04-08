@@ -26,7 +26,7 @@ typedef struct {
     int similarity; // 相似度百分比
 } attack_test_t;
 
-/* 计算字符串相似度（简单版本）*/
+/* 计算字符串相似度 */
 int calc_similarity(const char* s1, const char* s2) {
     if (!s1 || !s2) return 0;
     
@@ -34,15 +34,37 @@ int calc_similarity(const char* s1, const char* s2) {
     int len2 = strlen(s2);
     if (len1 == 0 || len2 == 0) return 0;
     
-    // 简单字符匹配计数
-    int matches = 0;
-    int min_len = len1 < len2 ? len1 : len2;
+    // 完全匹配
+    if (strcmp(s1, s2) == 0) return 100;
     
-    for (int i = 0; i < min_len; i++) {
-        if (s1[i] == s2[i]) matches++;
+    // 如果解码长度不到原始长度的80%，直接认为相似度很低
+    if (len1 < len2 * 8 / 10 || len2 < len1 * 8 / 10) {
+        // 长度差异太大，相似度很低
+        int min_len = len1 < len2 ? len1 : len2;
+        int matches = 0;
+        for (int i = 0; i < min_len; i++) {
+            if (s1[i] == s2[i]) matches++;
+        }
+        return (int)((float)matches / len2 * 100.0f * (float)min_len / len2);
     }
     
-    return (int)((float)matches / len2 * 100.0f);
+    // 长度相近：计算字符匹配率
+    int max_len = len1 > len2 ? len1 : len2;
+    int min_len = len1 < len2 ? len1 : len2;
+    const char *shorter = (len1 < len2) ? s1 : s2;
+    const char *longer = (len1 < len2) ? s2 : s1;
+    
+    // 尝试所有可能的对齐位置
+    int best_matches = 0;
+    for (int offset = 0; offset <= max_len - min_len; offset++) {
+        int matches = 0;
+        for (int i = 0; i < min_len; i++) {
+            if (shorter[i] == longer[offset + i]) matches++;
+        }
+        if (matches > best_matches) best_matches = matches;
+    }
+    
+    return (int)((float)best_matches / max_len * 100.0f);
 }
 
 /* 各种攻击函数 */
@@ -252,8 +274,20 @@ int main(int argc, char* argv[]) {
         
         // 生成攻击后的图像
         switch (test_defs[i].type) {
-            case -1: // 基准测试
+            case -1: // 基准测试 - 复制原始图像
                 snprintf(outfile, sizeof(outfile), "%s/baseline.bmp", "robustness_tests");
+                {
+                    FILE *fin = fopen(argv[1], "rb");
+                    FILE *fout = fopen(outfile, "wb");
+                    if (fin && fout) {
+                        uint8_t buf[4096];
+                        size_t n;
+                        while ((n = fread(buf, 1, sizeof(buf), fin)) > 0)
+                            fwrite(buf, 1, n, fout);
+                    }
+                    if (fin) fclose(fin);
+                    if (fout) fclose(fout);
+                }
                 break;
             case 0: // 裁剪
                 snprintf(outfile, sizeof(outfile), "%s/crop_%.0f.bmp", "robustness_tests", test_defs[i].param);
@@ -289,7 +323,12 @@ int main(int argc, char* argv[]) {
         
         if (tests[i].passed) {
             pass_count++;
-            printf("通过 (相似度: %d%%)\n", tests[i].similarity);
+            // 只有相似度100%才算真正通过
+            if (tests[i].similarity == 100) {
+                printf("通过 (相似度: %d%%) ✓\n", tests[i].similarity);
+            } else {
+                printf("通过但失真 (相似度: %d%%) ⚠\n", tests[i].similarity);
+            }
         } else {
             printf("失败\n");
         }
@@ -324,41 +363,50 @@ int main(int argc, char* argv[]) {
     
     /* 汇总 */
     printf("\n========================================\n");
-    printf("  测试总结\n");
+    printf("  测试总结 (严格模式：相似度100%%才算通过)\n");
     printf("========================================\n");
-    printf("总测试数: %d\n", test_count);
-    printf("通过数量: %d\n", pass_count);
-    printf("失败数量: %d\n", test_count - pass_count);
-    printf("通过率: %.1f%%\n", (float)pass_count / test_count * 100.0f);
     
-    /* 分类统计 */
-    int crop_pass = 0, noise_pass = 0, blur_pass = 0, bright_pass = 0, resize_pass = 0, jpeg_pass = 0;
-    for (int i = 1; i < test_count; i++) { // 跳过基准测试
-        if (strstr(tests[i].name, "裁剪") && tests[i].passed) crop_pass++;
-        if (strstr(tests[i].name, "噪声") && tests[i].passed) noise_pass++;
-        if (strstr(tests[i].name, "模糊") && tests[i].passed) blur_pass++;
-        if (strstr(tests[i].name, "亮度") && tests[i].passed) bright_pass++;
-        if (strstr(tests[i].name, "缩放") && tests[i].passed) resize_pass++;
-        if (strstr(tests[i].name, "JPEG") && tests[i].passed) jpeg_pass++;
+    // 重新计算：只有相似度100%才算通过
+    int strict_pass = 0;
+    for (int i = 0; i < test_count; i++) {
+        if (tests[i].similarity == 100) strict_pass++;
     }
     
-    printf("\n分类通过率:\n");
-    printf("  裁剪攻击: %d/3 (%.0f%%)\n", crop_pass, (float)crop_pass / 3 * 100);
-    printf("  噪声攻击: %d/4 (%.0f%%)\n", noise_pass, (float)noise_pass / 4 * 100);
-    printf("  模糊攻击: %d/3 (%.0f%%)\n", blur_pass, (float)blur_pass / 3 * 100);
-    printf("  亮度调整: %d/3 (%.0f%%)\n", bright_pass, (float)bright_pass / 3 * 100);
-    printf("  缩放攻击: %d/3 (%.0f%%)\n", resize_pass, (float)resize_pass / 3 * 100);
-    printf("  JPEG压缩: %d/4 (%.0f%%)\n", jpeg_pass, (float)jpeg_pass / 4 * 100);
+    printf("总测试数: %d\n", test_count);
+    printf("严格通过 (100%%): %d (%.1f%%)\n", strict_pass, (float)strict_pass / test_count * 100.0f);
+    printf("部分通过 (<100%%): %d (%.1f%%)\n", pass_count - strict_pass, (float)(pass_count - strict_pass) / test_count * 100.0f);
+    printf("完全失败: %d (%.1f%%)\n", test_count - pass_count, (float)(test_count - pass_count) / test_count * 100.0f);
+    
+    /* 分类统计 (严格模式) */
+    int crop_pass = 0, noise_pass = 0, blur_pass = 0, bright_pass = 0, resize_pass = 0, jpeg_pass = 0;
+    int crop_total = 0, noise_total = 0, blur_total = 0, bright_total = 0, resize_total = 0, jpeg_total = 0;
+    
+    for (int i = 0; i < test_count; i++) {
+        if (strstr(tests[i].name, "裁剪")) { crop_total++; if (tests[i].similarity == 100) crop_pass++; }
+        if (strstr(tests[i].name, "噪声")) { noise_total++; if (tests[i].similarity == 100) noise_pass++; }
+        if (strstr(tests[i].name, "模糊")) { blur_total++; if (tests[i].similarity == 100) blur_pass++; }
+        if (strstr(tests[i].name, "亮度")) { bright_total++; if (tests[i].similarity == 100) bright_pass++; }
+        if (strstr(tests[i].name, "缩放")) { resize_total++; if (tests[i].similarity == 100) resize_pass++; }
+        if (strstr(tests[i].name, "JPEG")) { jpeg_total++; if (tests[i].similarity == 100) jpeg_pass++; }
+    }
+    
+    printf("\n分类通过率 (严格模式):\n");
+    if (crop_total > 0) printf("  裁剪攻击: %d/%d (%.0f%%)\n", crop_pass, crop_total, (float)crop_pass / crop_total * 100);
+    if (noise_total > 0) printf("  噪声攻击: %d/%d (%.0f%%)\n", noise_pass, noise_total, (float)noise_pass / noise_total * 100);
+    if (blur_total > 0) printf("  模糊攻击: %d/%d (%.0f%%)\n", blur_pass, blur_total, (float)blur_pass / blur_total * 100);
+    if (bright_total > 0) printf("  亮度调整: %d/%d (%.0f%%)\n", bright_pass, bright_total, (float)bright_pass / bright_total * 100);
+    if (resize_total > 0) printf("  缩放攻击: %d/%d (%.0f%%)\n", resize_pass, resize_total, (float)resize_pass / resize_total * 100);
+    if (jpeg_total > 0) printf("  JPEG压缩: %d/%d (%.0f%%)\n", jpeg_pass, jpeg_total, (float)jpeg_pass / jpeg_total * 100);
     
     printf("\n========================================\n");
-    if (pass_count == test_count) {
-        printf("[优秀] 水印具有极强的鲁棒性！\n");
-    } else if (pass_count >= test_count * 0.8) {
-        printf("[良好] 水印具有良好的鲁棒性。\n");
-    } else if (pass_count >= test_count * 0.6) {
-        printf("[中等] 建议提高水印强度。\n");
+    if (strict_pass == test_count) {
+        printf("[优秀] 所有测试100%%通过！水印具有极强的鲁棒性。\n");
+    } else if (strict_pass >= test_count * 0.8) {
+        printf("[良好] 大部分测试100%%通过。水印具有良好的鲁棒性。\n");
+    } else if (strict_pass >= test_count * 0.6) {
+        printf("[中等] 部分测试100%%通过。建议继续优化算法。\n");
     } else {
-        printf("[较差] 需要显著提高水印强度。\n");
+        printf("[需改进] 大部分测试未达到100%%相似度。需要显著优化算法。\n");
     }
     printf("========================================\n");
     
