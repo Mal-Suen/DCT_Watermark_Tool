@@ -54,7 +54,9 @@ extern "C" {
         WM_ERROR_FILE_IO,            // 文件读写操作失败 (如文件不存在、权限不足)
         WM_ERROR_INVALID_FORMAT,     // 输入文件格式不符合要求 (如不是 BMP 或不是 24 位)
         WM_ERROR_MEMORY,             // 内存分配失败
-        WM_ERROR_INSUFFICIENT_SPACE  // 图像空间不足以容纳水印数据
+        WM_ERROR_INSUFFICIENT_SPACE, // 图像空间不足以容纳水印数据
+        WM_ERROR_NULL_PARAMETER,     // 参数为NULL
+        WM_ERROR_DECODE_FAILED       // 解码失败
     } wm_status_t;
 
     /* --- 核心接口声明 --- */
