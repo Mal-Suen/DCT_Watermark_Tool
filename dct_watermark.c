@@ -15,19 +15,20 @@
 #endif
 
 /* --- 常量定义 --- */
-#define WM_DEFAULT_STRENGTH     55.0        // 默认嵌入强度（多系数投票最佳平衡点）
+#define WM_DEFAULT_STRENGTH     70.0        // 默认嵌入强度（提高到70）
 #define WM_EARLY_EXIT_BLOCKS    300         // 早期退出：扫描块数阈值
 #define WM_JPEG_QUALITY         100         // JPEG保存质量(0-100)
 #define WM_MAX_EXT_LEN          32          // 最大文件扩展名长度
 #define WM_SYNC_MARKER_DEFAULT  0xAA        // 默认同步标记字节
 #define WM_BLOCK_SIZE           8           // DCT块大小
-#define WM_COEFF_PAIRS          2           // 使用的系数对数量（多系数投票）
+#define WM_COEFF_PAIRS          3           // 使用的系数对数量（增加到3）
+#define WM_BIT_REPEAT           8           // 固定重复次数（保证长文本完整）
 
-// 多系数对定义 - 都使用中低频系数，平衡鲁棒性和质量
-// 每个系数对用于嵌入同一个bit，通过多数投票提高鲁棒性
+// 多系数对定义 - 使用最稳定的低频系数
 static const int COEFF_PAIRS[WM_COEFF_PAIRS][4] = {
-    {2, 3, 3, 2},  // 系数对1: (2,3) vs (3,2) - 低频，最稳定
-    {3, 4, 4, 3},  // 系数对2: (3,4) vs (4,3) - 中频，原始系数
+    {1, 2, 2, 1},  // 系数对1: (1,2) vs (2,1) - 最低频，最稳定
+    {1, 3, 3, 1},  // 系数对2: (1,3) vs (3,1) - 低频
+    {2, 3, 3, 2},  // 系数对3: (2,3) vs (3,2) - 中低频
 };
 
 /* --- 内部静态查找表与常量 --- */
@@ -114,13 +115,15 @@ static int scan_watermark(uint8_t* pix, int w, int h, int ch, int ox, int oy, ui
 
     uint8_t shift = 0;
     int state = 0, bit_idx = 0, found_any = 0;
+    int repeat_count = 0;
+    int repeat_votes_1 = 0;
     int blocks_checked = 0;
 
     for (int i = oy; i <= h - WM_BLOCK_SIZE; i += WM_BLOCK_SIZE) {
         for (int j = ox; j <= w - WM_BLOCK_SIZE; j += WM_BLOCK_SIZE) {
             blocks_checked++;
-            if (state == 0 && blocks_checked > WM_EARLY_EXIT_BLOCKS)
-                return 0;   // 早期退出
+            if (state == 0 && blocks_checked > 4096 * 4)  // 最多检查4倍图像大小的块
+                return 0;
 
             double b[WM_BLOCK_SIZE][WM_BLOCK_SIZE], d[WM_BLOCK_SIZE][WM_BLOCK_SIZE];
             for (int r = 0; r < WM_BLOCK_SIZE; r++) {
@@ -130,37 +133,40 @@ static int scan_watermark(uint8_t* pix, int w, int h, int ch, int ox, int oy, ui
             }
 
             fdct_8x8(b, d);
-            
-            // 使用多数投票提取bit（提高鲁棒性）
-            int vote_1 = 0;  // 投票为1的系数对数量
+
+            int vote_1 = 0;
             for (int k = 0; k < WM_COEFF_PAIRS; k++) {
                 int r1 = COEFF_PAIRS[k][0];
                 int c1 = COEFF_PAIRS[k][1];
                 int r2 = COEFF_PAIRS[k][2];
                 int c2 = COEFF_PAIRS[k][3];
-                if (d[r1][c1] > d[r2][c2]) {
-                    vote_1++;
-                }
+                if (d[r1][c1] > d[r2][c2]) vote_1++;
             }
-            
-            // 多数投票：如果超过一半的系数对表示1，则提取1
-            int bit = (vote_1 > WM_COEFF_PAIRS / 2) ? 1 : 0;
-            shift = (shift << 1) | bit;
 
-            if (state == 0) {
-                if (shift == marker) {
-                    state = 1;
-                    bit_idx = 0;
-                    shift = 0;
+            if (vote_1 > WM_COEFF_PAIRS / 2) repeat_votes_1++;
+            repeat_count++;
+
+            if (repeat_count == WM_BIT_REPEAT) {
+                int bit = (repeat_votes_1 > WM_BIT_REPEAT / 2) ? 1 : 0;
+                shift = (shift << 1) | bit;
+                repeat_count = 0;
+                repeat_votes_1 = 0;
+
+                if (state == 0) {
+                    if (shift == marker) {
+                        state = 1;
+                        bit_idx = 0;
+                        shift = 0;
+                    }
                 }
-            }
-            else {
-                if (++bit_idx == 8) {
-                    if (shift == 0) return 1;  // 遇到终止符
-                    putchar(shift);
-                    bit_idx = 0;
-                    shift = 0;
-                    found_any = 1;
+                else {
+                    if (++bit_idx == 8) {
+                        if (shift == 0) return 1;
+                        putchar(shift);
+                        bit_idx = 0;
+                        shift = 0;
+                        found_any = 1;
+                    }
                 }
             }
         }
@@ -250,10 +256,19 @@ static int scan_watermark(uint8_t* pix, int w, int h, int ch, int ox, int oy, ui
 
         buf[0] = marker;
         memcpy(buf + 1, text, strlen(text));
-        int total_bits = (int)p_len * 8, b_idx = 0;
+        int total_bits = (int)p_len * 8;
+        int b_idx = 0;
+        
+        // 使用固定重复次数，编码解码一致
+        int repeat_count = WM_BIT_REPEAT;
 
         for (int i = 0; i <= h - WM_BLOCK_SIZE; i += WM_BLOCK_SIZE) {
-            for (int j = 0; j <= w - WM_BLOCK_SIZE; j += WM_BLOCK_SIZE, b_idx++) {
+            for (int j = 0; j <= w - WM_BLOCK_SIZE; j += WM_BLOCK_SIZE) {
+                int current_bit_idx = b_idx / repeat_count;
+                if (current_bit_idx >= total_bits) break;
+                int bit = (buf[(current_bit_idx % total_bits) / 8] >> (7 - (current_bit_idx % total_bits) % 8)) & 1;
+                b_idx++;
+
                 double b[WM_BLOCK_SIZE][WM_BLOCK_SIZE], d[WM_BLOCK_SIZE][WM_BLOCK_SIZE];
                 for (int r = 0; r < WM_BLOCK_SIZE; r++) {
                     uint8_t* p = pix + ((i + r) * w + j) * ch;
@@ -261,17 +276,14 @@ static int scan_watermark(uint8_t* pix, int w, int h, int ch, int ox, int oy, ui
                         b[r][c] = (double)p[c * ch + 2];
                 }
                 fdct_8x8(b, d);
-                
-                // 获取要嵌入的bit
-                int bit = (buf[(b_idx % total_bits) / 8] >> (7 - (b_idx % total_bits) % 8)) & 1;
-                
+
                 // 使用多个系数对嵌入同一bit（提高鲁棒性）
                 for (int k = 0; k < WM_COEFF_PAIRS; k++) {
                     int r1 = COEFF_PAIRS[k][0];
                     int c1 = COEFF_PAIRS[k][1];
                     int r2 = COEFF_PAIRS[k][2];
                     int c2 = COEFF_PAIRS[k][3];
-                    
+
                     if (bit) { // 嵌入1: 让 d[r1][c1] > d[r2][c2]
                         if (d[r1][c1] <= d[r2][c2]) {
                             d[r1][c1] = d[r2][c2] + strength;
@@ -285,7 +297,7 @@ static int scan_watermark(uint8_t* pix, int w, int h, int ch, int ox, int oy, ui
                         }
                     }
                 }
-                
+
                 idct_8x8(d, b);
                 for (int r = 0; r < WM_BLOCK_SIZE; r++) {
                     uint8_t* p = pix + ((i + r) * w + j) * ch;
