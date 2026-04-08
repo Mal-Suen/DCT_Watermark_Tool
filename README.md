@@ -1,11 +1,11 @@
 # DCT Watermark Tool | DCT离散余弦变换水印工具
 
 <div align="center">
+
 **Language / 语言选择:**
 [English](#english) | [中文](#中文)
 
 ---
-
 </div>
 <a id="english"></a>
 
