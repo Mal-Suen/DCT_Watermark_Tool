@@ -371,3 +371,6 @@ FodyWeavers.xsd
 *.fsproj
 *.vbproj
 *.sln
+
+# Compiled executables
+*.exe
