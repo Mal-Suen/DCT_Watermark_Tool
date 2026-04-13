@@ -16,11 +16,13 @@
 
 #define MAX_WATERMARK_LEN 1024
 #define ORIG_WATERMARK "Robustness Test Message: Hello World!"
+#define MAX_PATH_LEN 512
+#define TEST_OUTPUT_DIR "robustness_tests"
 
 /* 攻击类型定义 */
 typedef struct {
     char name[64];
-    char file[256];
+    char file[MAX_PATH_LEN];
     int passed;
     char decoded[MAX_WATERMARK_LEN];
     int similarity; // 相似度百分比
@@ -72,44 +74,62 @@ void test_crop(const char* input, const char* output, float percent) {
     int w, h, ch;
     uint8_t* pix = stbi_load(input, &w, &h, &ch, 0);
     if (!pix) return;
-    
+
     int new_w = (int)(w * sqrt(percent / 100.0f));
     int new_h = (int)(h * sqrt(percent / 100.0f));
     int ox = (w - new_w) / 2, oy = (h - new_h) / 2;
-    
+
     uint8_t* new_pix = (uint8_t*)malloc(new_w * new_h * ch);
+    if (!new_pix) {
+        stbi_image_free(pix);
+        return;
+    }
+
     for (int y = 0; y < new_h; y++)
         memcpy(new_pix + y * new_w * ch, pix + ((y + oy) * w + ox) * ch, new_w * ch);
-    
-    stbi_write_bmp(output, new_w, new_h, ch, new_pix);
+
+    int success = stbi_write_bmp(output, new_w, new_h, ch, new_pix);
     free(new_pix);
     stbi_image_free(pix);
+    
+    if (!success) {
+        fprintf(stderr, "警告: 写入文件失败: %s\n", output);
+    }
 }
 
 void test_noise(const char* input, const char* output, int level) {
     int w, h, ch;
     uint8_t* pix = stbi_load(input, &w, &h, &ch, 0);
     if (!pix) return;
-    
+
     srand(42);
     for (int i = 0; i < w * h * ch; i++) {
         int noise = (rand() % (level * 2 + 1)) - level;
         int val = pix[i] + noise;
         pix[i] = (uint8_t)(val > 255 ? 255 : (val < 0 ? 0 : val));
     }
-    
-    stbi_write_bmp(output, w, h, ch, pix);
+
+    int success = stbi_write_bmp(output, w, h, ch, pix);
     stbi_image_free(pix);
+    
+    if (!success) {
+        fprintf(stderr, "警告: 写入文件失败: %s\n", output);
+    }
 }
 
 void test_blur(const char* input, const char* output, int kernel) {
     int w, h, ch;
     uint8_t* pix = stbi_load(input, &w, &h, &ch, 0);
     if (!pix) return;
-    
+
     uint8_t* new_pix = (uint8_t*)malloc(w * h * ch);
-    int half = kernel / 2;
+    if (!new_pix) {
+        stbi_image_free(pix);
+        return;
+    }
     
+    int half = kernel / 2;
+
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
             for (int c = 0; c < ch; c++) {
@@ -127,34 +147,46 @@ void test_blur(const char* input, const char* output, int kernel) {
             }
         }
     }
-    
-    stbi_write_bmp(output, w, h, ch, new_pix);
+
+    int success = stbi_write_bmp(output, w, h, ch, new_pix);
     free(new_pix);
     stbi_image_free(pix);
+    
+    if (!success) {
+        fprintf(stderr, "警告: 写入文件失败: %s\n", output);
+    }
 }
 
 void test_brightness(const char* input, const char* output, float factor) {
     int w, h, ch;
     uint8_t* pix = stbi_load(input, &w, &h, &ch, 0);
     if (!pix) return;
-    
+
     for (int i = 0; i < w * h * ch; i++) {
         int val = (int)(pix[i] * factor);
         pix[i] = (uint8_t)(val > 255 ? 255 : (val < 0 ? 0 : val));
     }
-    
-    stbi_write_bmp(output, w, h, ch, pix);
+
+    int success = stbi_write_bmp(output, w, h, ch, pix);
     stbi_image_free(pix);
+    
+    if (!success) {
+        fprintf(stderr, "警告: 写入文件失败: %s\n", output);
+    }
 }
 
 void test_resize(const char* input, const char* output, float scale) {
     int w, h, ch;
     uint8_t* pix = stbi_load(input, &w, &h, &ch, 0);
     if (!pix) return;
-    
+
     int new_w = (int)(w * scale), new_h = (int)(h * scale);
     uint8_t* new_pix = (uint8_t*)malloc(new_w * new_h * ch);
-    
+    if (!new_pix) {
+        stbi_image_free(pix);
+        return;
+    }
+
     for (int y = 0; y < new_h; y++) {
         for (int x = 0; x < new_w; x++) {
             int sx = (int)((float)x / new_w * w);
@@ -163,19 +195,27 @@ void test_resize(const char* input, const char* output, float scale) {
                 new_pix[(y * new_w + x) * ch + c] = pix[(sy * w + sx) * ch + c];
         }
     }
-    
-    stbi_write_bmp(output, new_w, new_h, ch, new_pix);
+
+    int success = stbi_write_bmp(output, new_w, new_h, ch, new_pix);
     free(new_pix);
     stbi_image_free(pix);
+    
+    if (!success) {
+        fprintf(stderr, "警告: 写入文件失败: %s\n", output);
+    }
 }
 
 void test_jpeg(const char* input, const char* output, int quality) {
     int w, h, ch;
     uint8_t* pix = stbi_load(input, &w, &h, &ch, 0);
     if (!pix) return;
-    
-    stbi_write_jpg(output, w, h, ch, pix, quality);
+
+    int success = stbi_write_jpg(output, w, h, ch, pix, quality);
     stbi_image_free(pix);
+    
+    if (!success) {
+        fprintf(stderr, "警告: 写入文件失败: %s\n", output);
+    }
 }
 
 int run_decode(const char* input, char* output, int out_size) {
@@ -221,19 +261,19 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    system("if not exist robustness_tests mkdir robustness_tests");
-    
+    system("if not exist " TEST_OUTPUT_DIR " mkdir " TEST_OUTPUT_DIR);
+
     printf("\n========================================\n");
     printf("  DCT 水印鲁棒性测试工具 v2\n");
     printf("========================================\n");
     printf("原始水印: %s\n", ORIG_WATERMARK);
     printf("测试图像: %s\n", argv[1]);
     printf("========================================\n\n");
-    
+
     attack_test_t tests[30];
     int test_count = 0;
     int pass_count = 0;
-    
+
     /* 定义测试用例 */
     struct {
         char name[64];
@@ -275,7 +315,7 @@ int main(int argc, char* argv[]) {
         // 生成攻击后的图像
         switch (test_defs[i].type) {
             case -1: // 基准测试 - 复制原始图像
-                snprintf(outfile, sizeof(outfile), "%s/baseline.bmp", "robustness_tests");
+                snprintf(outfile, sizeof(outfile), "%s/baseline.bmp", TEST_OUTPUT_DIR);
                 {
                     FILE *fin = fopen(argv[1], "rb");
                     FILE *fout = fopen(outfile, "wb");
@@ -290,27 +330,27 @@ int main(int argc, char* argv[]) {
                 }
                 break;
             case 0: // 裁剪
-                snprintf(outfile, sizeof(outfile), "%s/crop_%.0f.bmp", "robustness_tests", test_defs[i].param);
+                snprintf(outfile, sizeof(outfile), "%s/crop_%.0f.bmp", TEST_OUTPUT_DIR, test_defs[i].param);
                 test_crop(argv[1], outfile, test_defs[i].param);
                 break;
             case 1: // 噪声
-                snprintf(outfile, sizeof(outfile), "%s/noise_%.0f.bmp", "robustness_tests", test_defs[i].param);
+                snprintf(outfile, sizeof(outfile), "%s/noise_%.0f.bmp", TEST_OUTPUT_DIR, test_defs[i].param);
                 test_noise(argv[1], outfile, (int)test_defs[i].param);
                 break;
             case 2: // 模糊
-                snprintf(outfile, sizeof(outfile), "%s/blur_%.0f.bmp", "robustness_tests", test_defs[i].param);
+                snprintf(outfile, sizeof(outfile), "%s/blur_%.0f.bmp", TEST_OUTPUT_DIR, test_defs[i].param);
                 test_blur(argv[1], outfile, (int)test_defs[i].param);
                 break;
             case 3: // 亮度
-                snprintf(outfile, sizeof(outfile), "%s/bright_%.1f.bmp", "robustness_tests", test_defs[i].param);
+                snprintf(outfile, sizeof(outfile), "%s/bright_%.1f.bmp", TEST_OUTPUT_DIR, test_defs[i].param);
                 test_brightness(argv[1], outfile, test_defs[i].param);
                 break;
             case 4: // 缩放
-                snprintf(outfile, sizeof(outfile), "%s/resize_%.2f.bmp", "robustness_tests", test_defs[i].param);
+                snprintf(outfile, sizeof(outfile), "%s/resize_%.2f.bmp", TEST_OUTPUT_DIR, test_defs[i].param);
                 test_resize(argv[1], outfile, test_defs[i].param);
                 break;
             case 5: // JPEG
-                snprintf(outfile, sizeof(outfile), "%s/jpeg_q%.0f.jpg", "robustness_tests", test_defs[i].param);
+                snprintf(outfile, sizeof(outfile), "%s/jpeg_q%.0f.jpg", TEST_OUTPUT_DIR, test_defs[i].param);
                 test_jpeg(argv[1], outfile, (int)test_defs[i].param);
                 break;
         }
